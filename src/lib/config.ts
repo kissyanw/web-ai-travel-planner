@@ -12,6 +12,8 @@ export const getConfig = () => {
       llmApiKey: process.env.NEXT_PUBLIC_LLM_API_KEY || '',
       llmApiUrl: process.env.NEXT_PUBLIC_LLM_API_URL || '',
       llmModel: process.env.NEXT_PUBLIC_LLM_MODEL || 'qwen-plus',
+      unsplashKey: process.env.NEXT_PUBLIC_UNSPLASH_ACCESS_KEY || '',
+      pexelsKey: process.env.NEXT_PUBLIC_PEXELS_API_KEY || '',
     }
   } else {
     // 客户端 - 从localStorage或环境变量获取
@@ -34,6 +36,8 @@ export const getConfig = () => {
       llmApiKey: localStorage.getItem('llm-api-key') || process.env.NEXT_PUBLIC_LLM_API_KEY || '',
       llmApiUrl: localStorage.getItem('llm-api-url') || process.env.NEXT_PUBLIC_LLM_API_URL || '',
       llmModel: localStorage.getItem('llm-model') || 'qwen-plus',
+      unsplashKey: localStorage.getItem('unsplash-key') || process.env.NEXT_PUBLIC_UNSPLASH_ACCESS_KEY || '',
+      pexelsKey: localStorage.getItem('pexels-key') || process.env.NEXT_PUBLIC_PEXELS_API_KEY || '',
     }
   }
 }

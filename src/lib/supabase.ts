@@ -50,13 +50,49 @@ export const createSupabaseClient = () => {
   }
 }
 
-// 服务端使用
-export const createServerSupabaseClient = () => {
+// 服务端使用（用于 API 路由）
+export const createServerSupabaseClient = (request: Request) => {
   const config = getSupabaseConfig()
   
   if (!config.url || !config.key) {
     throw new Error('Missing Supabase environment variables. Please configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY')
   }
   
-  return createClient(config.url, config.key)
+  // 从请求头中获取 Authorization token
+  const authHeader = request.headers.get('authorization')
+  const accessToken = authHeader?.replace('Bearer ', '')
+  
+  // 从请求中提取 cookies
+  const cookieHeader = request.headers.get('cookie') || ''
+  
+  // 创建 Supabase 客户端
+  const client = createClient(config.url, config.key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storage: {
+        getItem: () => {
+          // 如果有 access token，返回 session 数据
+          if (accessToken) {
+            return JSON.stringify({
+              access_token: accessToken,
+              token_type: 'bearer',
+            })
+          }
+          return null
+        },
+        setItem: () => {},
+        removeItem: () => {},
+      },
+    },
+    global: {
+      headers: {
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+    },
+  })
+  
+  return client
 }

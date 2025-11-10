@@ -6,7 +6,8 @@ import { useAuth } from '@/hooks/useAuth'
 import { createSupabaseClient } from '@/lib/supabase'
 import MapView from '@/components/MapView'
 import { type TravelPlan, type Activity } from '@/lib/ai'
-import { ArrowLeft, Calendar, DollarSign, Users, MapPin, Plus } from 'lucide-react'
+import { loadActivityImages, searchActivityImages, saveActivityImages, type ActivityImage } from '@/lib/images'
+import { ArrowLeft, Calendar, DollarSign, Users, MapPin, Plus, Clock, Image as ImageIcon, TrendingUp } from 'lucide-react'
 import VoiceInput from '@/components/VoiceInput'
 import { analyzeBudget } from '@/lib/ai'
 
@@ -23,6 +24,11 @@ export default function PlanDetailPage() {
   const [budgetAnalysis, setBudgetAnalysis] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [voiceExpense, setVoiceExpense] = useState('')
+  const [highlightedActivity, setHighlightedActivity] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<'map' | 'list'>('map')
+  const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null)
+  const [activityImages, setActivityImages] = useState<Record<string, ActivityImage[]>>({})
+  const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     if (!loading && !user) {
@@ -35,6 +41,27 @@ export default function PlanDetailPage() {
       loadPlan()
     }
   }, [user, planId])
+
+  // 当计划加载完成时，预加载所有活动的图片
+  useEffect(() => {
+    if (!plan) return
+    
+    const allActivitiesList = plan.itinerary.flatMap((day) => day.activities)
+    if (allActivitiesList.length === 0) return
+    
+    // 不立即设置备用图片，直接尝试加载真实图片
+    // 如果找不到相关图片，会显示"暂无图片"占位符，而不是误导性的随机图片
+    
+    // 异步加载数据库图片和搜索新图片
+    allActivitiesList.forEach(activity => {
+      // 使用setTimeout确保不阻塞渲染
+      setTimeout(() => {
+        loadImagesForActivity(activity).catch(error => {
+          console.error(`Error preloading images for ${activity.name}:`, error)
+        })
+      }, 100)
+    })
+  }, [plan]) // 只依赖plan，避免无限循环
 
   const loadPlan = async () => {
     try {
@@ -144,198 +171,826 @@ export default function PlanDetailPage() {
 
   const currentDay = plan.itinerary[activeDay]
   const allActivities: Activity[] = plan.itinerary.flatMap((day) => day.activities)
+  const currentDayActivities = currentDay?.activities || []
+  
+  // 加载活动图片
+  const loadImagesForActivity = async (activity: Activity) => {
+    if (!plan) return
+    
+    // 如果已经加载过，直接返回
+    if (activityImages[activity.name] && activityImages[activity.name].length > 0) {
+      return
+    }
+
+    setLoadingImages(prev => ({ ...prev, [activity.name]: true }))
+    try {
+      // 先从数据库加载
+      const dbImages = await loadActivityImages(plan.id, activity.name)
+      
+      if (dbImages && dbImages.length > 0) {
+        // 如果数据库有图片，使用数据库图片
+        setActivityImages(prev => ({ ...prev, [activity.name]: dbImages }))
+      } else {
+        // 如果数据库没有图片，尝试搜索新图片
+        // 不设置备用图片，等待搜索结果
+        // 如果搜索不到相关图片，会显示"暂无图片"占位符
+        const images = await searchActivityImages(activity.name, activity.location.name)
+        if (images.length > 0) {
+          // 保存搜索到的图片到数据库
+          await saveActivityImages(plan.id, activity.name, images)
+          setActivityImages(prev => ({ ...prev, [activity.name]: images.map(img => ({
+            id: `search-${Date.now()}`,
+            plan_id: plan.id,
+            activity_name: activity.name,
+            image_url: img.url,
+            image_description: img.description || '',
+            created_at: new Date().toISOString()
+          })) }))
+        }
+        // 如果没有找到相关图片，不设置任何图片，会显示"暂无图片"占位符
+      }
+    } catch (error) {
+      console.error('Error loading images:', error)
+      // 出错时不设置任何图片，避免显示无关图片
+      // 会显示"暂无图片"占位符
+    } finally {
+      setLoadingImages(prev => ({ ...prev, [activity.name]: false }))
+    }
+  }
+
+  // 获取活动图片（优先使用数据库中的图片）
+  const getActivityImages = (activity: Activity): string[] => {
+    const images = activityImages[activity.name]
+    if (images && images.length > 0) {
+      return images.map(img => img.image_url)
+    }
+    // 如果没有加载过，返回空数组（会显示"暂无图片"占位符）
+    return []
+  }
+
+  // 获取活动主图（用于显示）
+  const getActivityImage = (activity: Activity): string => {
+    const images = getActivityImages(activity)
+    // 如果有相关图片，使用第一张；否则显示占位符（明确告知用户没有图片）
+    if (images.length > 0 && images[0]) {
+      return images[0]
+    }
+    // 使用占位符，明确显示"暂无图片"而不是随机图片
+    return `https://via.placeholder.com/400x300/e5e7eb/9ca3af?text=${encodeURIComponent('暂无图片')}`
+  }
+  
+  const handleActivityClick = async (activity: Activity) => {
+    setHighlightedActivity(activity.name)
+    setSelectedActivity(activity) // 设置选中的活动，触发地图跳转和详情显示
+    
+    // 如果还没有加载过图片，尝试加载（不设置备用图片）
+    if (!activityImages[activity.name] || activityImages[activity.name].length === 0) {
+      // 直接加载图片，不设置备用图片
+      // 如果找不到相关图片，会显示"暂无图片"占位符
+    }
+    
+    // 异步加载该活动的图片（从数据库加载，如果数据库有更好的图片会替换）
+    loadImagesForActivity(activity).catch(error => {
+      console.error('Error loading images for activity:', error)
+    })
+    
+    // 滚动到对应活动
+    const element = document.getElementById(`activity-${activity.name}`)
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }
+
+  const totalExpenses = Object.values(expenses).reduce((a, b) => a + b, 0)
+  const remainingBudget = plan.budget - totalExpenses
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm sticky top-0 z-10">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      {/* 顶部导航栏 */}
+      <header className="bg-white/80 backdrop-blur-md shadow-sm sticky top-0 z-20 border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <button
-            onClick={() => router.back()}
-            className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            返回
-          </button>
-          <h1 className="text-2xl font-bold text-gray-800">{plan.destination}</h1>
-          <div className="flex gap-4 mt-2 text-sm text-gray-600">
-            <div className="flex items-center gap-1">
-              <Calendar className="w-4 h-4" />
-              {plan.days} 天
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => router.back()}
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <ArrowLeft className="w-5 h-5" />
+                <span className="hidden sm:inline">返回</span>
+              </button>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-800">{plan.destination}</h1>
+                <div className="flex gap-4 mt-1 text-sm text-gray-600">
+                  <div className="flex items-center gap-1">
+                    <Calendar className="w-4 h-4" />
+                    {plan.days} 天
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Users className="w-4 h-4" />
+                    {plan.travelers} 人
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <DollarSign className="w-4 h-4" />
-              预算: ¥{plan.budget.toLocaleString()}
-            </div>
-            <div className="flex items-center gap-1">
-              <Users className="w-4 h-4" />
-              {plan.travelers} 人
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setViewMode('map')}
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  viewMode === 'map'
+                    ? 'bg-primary text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                地图视图
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  viewMode === 'list'
+                    ? 'bg-primary text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                列表视图
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* 地图视图 */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">行程地图</h2>
-          <MapView activities={allActivities} />
-        </div>
-
-        {/* 费用记录 */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">费用记录</h2>
-          <VoiceInput onResult={handleVoiceExpense} />
-          {voiceExpense && (
-            <div className="mt-2 p-2 bg-blue-50 rounded text-sm text-gray-700">
-              识别：{voiceExpense}
-            </div>
-          )}
-
-          <div className="mt-4">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* 预算卡片 */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl shadow-lg p-6">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-600">总支出</span>
-              <span className="font-semibold">
-                ¥{Object.values(expenses).reduce((a, b) => a + b, 0).toLocaleString()}
-              </span>
+              <span className="text-blue-100 text-sm">总预算</span>
+              <DollarSign className="w-5 h-5 opacity-80" />
             </div>
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-gray-600">剩余预算</span>
-              <span className={`font-semibold ${
-                plan.budget - Object.values(expenses).reduce((a, b) => a + b, 0) < 0
-                  ? 'text-red-600'
-                  : 'text-green-600'
-              }`}>
-                ¥{(plan.budget - Object.values(expenses).reduce((a, b) => a + b, 0)).toLocaleString()}
-              </span>
+            <div className="text-2xl font-bold">¥{plan.budget.toLocaleString()}</div>
+          </div>
+          <div className="bg-gradient-to-br from-green-500 to-green-600 text-white rounded-xl shadow-lg p-6">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-green-100 text-sm">已支出</span>
+              <TrendingUp className="w-5 h-5 opacity-80" />
             </div>
+            <div className="text-2xl font-bold">¥{totalExpenses.toLocaleString()}</div>
+          </div>
+          <div className={`bg-gradient-to-br rounded-xl shadow-lg p-6 ${
+            remainingBudget >= 0
+              ? 'from-purple-500 to-purple-600 text-white'
+              : 'from-red-500 to-red-600 text-white'
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <span className={`text-sm ${remainingBudget >= 0 ? 'text-purple-100' : 'text-red-100'}`}>
+                剩余预算
+              </span>
+              <DollarSign className="w-5 h-5 opacity-80" />
+            </div>
+            <div className="text-2xl font-bold">¥{remainingBudget.toLocaleString()}</div>
+          </div>
+        </div>
 
-            <button
-              onClick={handleAnalyzeBudget}
-              disabled={analyzing}
-              className="px-4 py-2 bg-primary text-white rounded hover:bg-primary/90 disabled:opacity-50"
-            >
-              {analyzing ? '分析中...' : 'AI预算分析'}
-            </button>
-
-            {budgetAnalysis && (
-              <div className="mt-4 p-4 bg-blue-50 rounded text-sm whitespace-pre-wrap">
-                {budgetAnalysis}
+        {/* 地图为主的布局 */}
+        {viewMode === 'map' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* 左侧：地图（占2/3） */}
+            <div className="lg:col-span-2">
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+                <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+                  <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-primary" />
+                    行程地图
+                  </h2>
+                </div>
+                <div className="h-[600px]">
+                  <MapView 
+                    activities={allActivities}
+                    onMarkerClick={handleActivityClick}
+                    highlightedActivityId={highlightedActivity || undefined}
+                    focusActivity={selectedActivity}
+                  />
+                </div>
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* 日程选择 */}
-        <div className="mb-6">
-          <div className="flex gap-2 overflow-x-auto pb-2">
-            {plan.itinerary.map((day, index) => (
-              <button
-                key={index}
-                onClick={() => setActiveDay(index)}
-                className={`px-4 py-2 rounded-lg whitespace-nowrap ${
-                  activeDay === index
-                    ? 'bg-primary text-white'
-                    : 'bg-white text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                第 {day.day} 天
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 当天行程 */}
-        {currentDay && (
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">第 {currentDay.day} 天</h2>
-              <span className="text-sm text-gray-600">
-                预估费用: ¥{currentDay.estimatedCost.toLocaleString()}
-              </span>
-            </div>
-
-            <div className="space-y-4">
-              {currentDay.activities.map((activity, index) => (
-                <div
-                  key={index}
-                  className="border-l-4 border-primary pl-4 py-2"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-semibold text-gray-800">
-                          {activity.time}
-                        </span>
-                        <span className={`px-2 py-1 text-xs rounded ${
-                          activity.type === 'attraction'
-                            ? 'bg-blue-100 text-blue-700'
-                            : activity.type === 'restaurant'
-                            ? 'bg-green-100 text-green-700'
-                            : activity.type === 'hotel'
-                            ? 'bg-purple-100 text-purple-700'
-                            : 'bg-gray-100 text-gray-700'
-                        }`}>
-                          {activity.type === 'attraction'
-                            ? '景点'
-                            : activity.type === 'restaurant'
-                            ? '餐厅'
-                            : activity.type === 'hotel'
-                            ? '住宿'
-                            : '交通'}
-                        </span>
-                      </div>
-                      <h3 className="font-semibold text-gray-800 mb-1">
-                        {activity.name}
-                      </h3>
-                      {activity.description && (
-                        <p className="text-sm text-gray-600 mb-2">
-                          {activity.description}
-                        </p>
-                      )}
-                      <div className="flex items-center gap-4 text-xs text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-3 h-3" />
-                          {activity.location.name}
+              
+              {/* 地点详情面板 */}
+              {selectedActivity && (
+                <div className="mt-6 bg-white rounded-xl shadow-lg overflow-hidden animate-in slide-in-from-bottom-4">
+                  <div className="p-6">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className={`px-3 py-1 text-xs font-bold rounded-full text-white ${
+                            selectedActivity.type === 'attraction'
+                              ? 'bg-blue-500'
+                              : selectedActivity.type === 'restaurant'
+                              ? 'bg-green-500'
+                              : selectedActivity.type === 'hotel'
+                              ? 'bg-purple-500'
+                              : 'bg-orange-500'
+                          }`}>
+                            {selectedActivity.type === 'attraction' ? '🏛️ 景点' : 
+                             selectedActivity.type === 'restaurant' ? '🍽️ 餐厅' : 
+                             selectedActivity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                            {selectedActivity.time}
+                          </span>
                         </div>
-                        {activity.duration && (
-                          <span>预计时长: {activity.duration}</span>
-                        )}
-                        {activity.estimatedCost && (
-                          <span>预估费用: ¥{activity.estimatedCost}</span>
+                        <h3 className="text-2xl font-bold text-gray-800 mb-2">{selectedActivity.name}</h3>
+                        {selectedActivity.description && (
+                          <p className="text-gray-600 mb-4 leading-relaxed">{selectedActivity.description}</p>
                         )}
                       </div>
+                      <button
+                        onClick={() => setSelectedActivity(null)}
+                        className="ml-4 text-gray-400 hover:text-gray-600 transition-colors"
+                        aria-label="关闭详情"
+                      >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
                     </div>
-                    <div className="ml-4">
-                      {expenses[activity.name] ? (
-                        <div className="text-right">
-                          <div className="text-sm font-semibold text-gray-800">
-                            ¥{expenses[activity.name].toLocaleString()}
-                          </div>
-                          <button
-                            onClick={() => handleAddExpense(activity.name, expenses[activity.name])}
-                            className="text-xs text-blue-600 hover:underline"
-                          >
-                            修改
-                          </button>
+                    
+                    {/* 图片展示 */}
+                    <div className="mb-4">
+                      {loadingImages[selectedActivity.name] && (!activityImages[selectedActivity.name] || activityImages[selectedActivity.name].length === 0) ? (
+                        <div className="w-full h-64 bg-gray-200 rounded-lg flex items-center justify-center">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                         </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="relative w-full h-64 rounded-lg overflow-hidden bg-gray-200">
+                            <img
+                              src={getActivityImage(selectedActivity)}
+                              alt={selectedActivity.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                const target = e.target as HTMLImageElement
+                                target.src = `https://via.placeholder.com/800x400/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
+                                console.error('Image load error:', target.src)
+                              }}
+                              onLoad={() => {
+                                console.log('Image loaded successfully:', getActivityImage(selectedActivity))
+                              }}
+                            />
+                          </div>
+                          {getActivityImages(selectedActivity).length > 1 && (
+                            <div className="grid grid-cols-3 gap-2">
+                              {getActivityImages(selectedActivity).slice(1, 4).map((imgUrl, idx) => (
+                                <img
+                                  key={idx}
+                                  src={imgUrl}
+                                  alt={`${selectedActivity.name} ${idx + 2}`}
+                                  className="w-full h-20 object-cover rounded cursor-pointer hover:opacity-80 transition-opacity"
+                                  onClick={() => {
+                                    // 点击小图切换主图
+                                    const currentImages = activityImages[selectedActivity.name] || []
+                                    const clickedImage = currentImages.find(img => img.image_url === imgUrl)
+                                    if (clickedImage) {
+                                      const updatedImages = [clickedImage, ...currentImages.filter(img => img.image_url !== imgUrl)]
+                                      setActivityImages(prev => ({ ...prev, [selectedActivity.name]: updatedImages }))
+                                    }
+                                  }}
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = `https://via.placeholder.com/200x150/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* 详细信息 */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <MapPin className="w-5 h-5 text-primary" />
+                        <span className="text-sm">{selectedActivity.location.name}</span>
+                      </div>
+                      {selectedActivity.duration && (
+                        <div className="flex items-center gap-2 text-gray-600">
+                          <Clock className="w-5 h-5 text-primary" />
+                          <span className="text-sm">预计时长: {selectedActivity.duration}</span>
+                        </div>
+                      )}
+                      {selectedActivity.estimatedCost !== undefined && selectedActivity.estimatedCost !== null && (
+                        <div className="flex items-center gap-2 text-green-600 font-semibold">
+                          <DollarSign className="w-5 h-5" />
+                          <span className="text-sm">预估费用: ¥{selectedActivity.estimatedCost}</span>
+                        </div>
+                      )}
+                      {expenses[selectedActivity.name] !== undefined && (
+                        <div className="flex items-center gap-2 text-blue-600 font-semibold">
+                          <DollarSign className="w-5 h-5" />
+                          <span className="text-sm">实际支出: ¥{expenses[selectedActivity.name].toLocaleString()}</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* 费用记录按钮 */}
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      {expenses[selectedActivity.name] !== undefined ? (
+                        <button
+                          onClick={() => {
+                            const amount = prompt('请输入实际支出金额（元）', expenses[selectedActivity.name].toString())
+                            if (amount !== null) {
+                              handleAddExpense(selectedActivity.name, parseFloat(amount))
+                            }
+                          }}
+                          className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 text-sm font-semibold transition-colors"
+                        >
+                          修改费用记录
+                        </button>
                       ) : (
                         <button
                           onClick={() => {
                             const amount = prompt('请输入实际支出金额（元）')
-                            if (amount) {
-                              handleAddExpense(activity.name, parseFloat(amount))
+                            if (amount !== null) {
+                              handleAddExpense(selectedActivity.name, parseFloat(amount))
                             }
                           }}
-                          className="flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 text-sm"
+                          className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 text-sm font-semibold transition-colors"
                         >
-                          <Plus className="w-3 h-3" />
+                          <Plus className="w-4 h-4 inline mr-2" />
                           记录费用
                         </button>
                       )}
                     </div>
                   </div>
                 </div>
-              ))}
+              )}
+            </div>
+
+            {/* 右侧：当天行程列表（占1/3） */}
+            <div className="space-y-6">
+              {/* 日程选择 */}
+              <div className="bg-white rounded-xl shadow-lg p-4">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">选择日期</h3>
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                  {plan.itinerary.map((day, index) => (
+                    <button
+                      key={index}
+                      onClick={() => setActiveDay(index)}
+                      className={`px-4 py-2 rounded-lg whitespace-nowrap transition-all ${
+                        activeDay === index
+                          ? 'bg-primary text-white shadow-md scale-105'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      第 {day.day} 天
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 当天行程 */}
+              {currentDay && (
+                <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+                  <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-pink-50">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-semibold text-gray-800">
+                        第 {currentDay.day} 天
+                      </h3>
+                      <span className="text-sm text-gray-600 bg-white px-3 py-1 rounded-full">
+                        ¥{currentDay.estimatedCost.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="max-h-[500px] overflow-y-auto">
+                    <div className="p-4 space-y-4">
+                      {currentDayActivities.map((activity, index) => (
+                        <div
+                          key={index}
+                          id={`activity-${activity.name}`}
+                          onClick={() => handleActivityClick(activity)}
+                          className={`group cursor-pointer rounded-lg border-2 transition-all ${
+                            highlightedActivity === activity.name
+                              ? 'border-yellow-400 shadow-lg scale-105 bg-yellow-50'
+                              : 'border-gray-200 hover:border-primary hover:shadow-md bg-white'
+                          }`}
+                        >
+                          <div className="p-4">
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                                  {activity.time}
+                                </span>
+                                <span className={`px-2 py-1 text-xs font-semibold rounded ${
+                                  activity.type === 'attraction'
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : activity.type === 'restaurant'
+                                    ? 'bg-green-100 text-green-700'
+                                    : activity.type === 'hotel'
+                                    ? 'bg-purple-100 text-purple-700'
+                                    : 'bg-orange-100 text-orange-700'
+                                }`}>
+                                  {activity.type === 'attraction' ? '🏛️ 景点' : 
+                                   activity.type === 'restaurant' ? '🍽️ 餐厅' : 
+                                   activity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
+                                </span>
+                              </div>
+                            </div>
+                            <h4 className="font-bold text-gray-800 mb-1 group-hover:text-primary transition-colors">
+                              {activity.name}
+                            </h4>
+                            {activity.description && (
+                              <p className="text-sm text-gray-600 mb-2 line-clamp-2">
+                                {activity.description}
+                              </p>
+                            )}
+                            <div className="flex items-center gap-3 text-xs text-gray-500 mt-2">
+                              <div className="flex items-center gap-1">
+                                <MapPin className="w-3 h-3" />
+                                <span className="truncate max-w-[120px]">{activity.location.name}</span>
+                              </div>
+                              {activity.duration && (
+                                <div className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {activity.duration}
+                                </div>
+                              )}
+                            </div>
+                            {activity.estimatedCost !== undefined && activity.estimatedCost !== null && (
+                              <div className="mt-2 text-sm font-semibold text-green-600">
+                                ¥{activity.estimatedCost}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* 列表视图 - 带图片的详细行程 */
+          <div className="space-y-6">
+            {/* 地图预览 */}
+            <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+              <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <MapPin className="w-5 h-5 text-primary" />
+                  行程地图
+                </h2>
+              </div>
+              <div className="h-[400px]">
+                <MapView 
+                  activities={allActivities}
+                  onMarkerClick={handleActivityClick}
+                  highlightedActivityId={highlightedActivity || undefined}
+                  focusActivity={selectedActivity}
+                />
+              </div>
+            </div>
+            
+            {/* 地点详情面板 - 列表视图 */}
+            {selectedActivity && (
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden animate-in slide-in-from-bottom-4">
+                <div className="p-6">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className={`px-3 py-1 text-xs font-bold rounded-full text-white ${
+                          selectedActivity.type === 'attraction'
+                            ? 'bg-blue-500'
+                            : selectedActivity.type === 'restaurant'
+                            ? 'bg-green-500'
+                            : selectedActivity.type === 'hotel'
+                            ? 'bg-purple-500'
+                            : 'bg-orange-500'
+                        }`}>
+                          {selectedActivity.type === 'attraction' ? '🏛️ 景点' : 
+                           selectedActivity.type === 'restaurant' ? '🍽️ 餐厅' : 
+                           selectedActivity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
+                        </span>
+                        <span className="text-sm font-semibold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                          {selectedActivity.time}
+                        </span>
+                      </div>
+                      <h3 className="text-2xl font-bold text-gray-800 mb-2">{selectedActivity.name}</h3>
+                      {selectedActivity.description && (
+                        <p className="text-gray-600 mb-4 leading-relaxed">{selectedActivity.description}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setSelectedActivity(null)}
+                      className="ml-4 text-gray-400 hover:text-gray-600 transition-colors"
+                      aria-label="关闭详情"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  
+                  {/* 图片展示 */}
+                  <div className="mb-4">
+                    {loadingImages[selectedActivity.name] && (!activityImages[selectedActivity.name] || activityImages[selectedActivity.name].length === 0) ? (
+                      <div className="w-full h-64 bg-gray-200 rounded-lg flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="relative w-full h-64 rounded-lg overflow-hidden bg-gray-200">
+                          <img
+                            src={getActivityImage(selectedActivity)}
+                            alt={selectedActivity.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement
+                              target.src = `https://via.placeholder.com/800x400/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
+                              console.error('Image load error:', target.src)
+                            }}
+                            onLoad={() => {
+                              console.log('Image loaded successfully:', getActivityImage(selectedActivity))
+                            }}
+                          />
+                        </div>
+                        {getActivityImages(selectedActivity).length > 1 && (
+                          <div className="grid grid-cols-3 gap-2">
+                            {getActivityImages(selectedActivity).slice(1, 4).map((imgUrl, idx) => (
+                              <img
+                                key={idx}
+                                src={imgUrl}
+                                alt={`${selectedActivity.name} ${idx + 2}`}
+                                className="w-full h-20 object-cover rounded cursor-pointer hover:opacity-80 transition-opacity"
+                                onClick={() => {
+                                  // 点击小图切换主图
+                                  const currentImages = activityImages[selectedActivity.name] || []
+                                  const clickedImage = currentImages.find(img => img.image_url === imgUrl)
+                                  if (clickedImage) {
+                                    const updatedImages = [clickedImage, ...currentImages.filter(img => img.image_url !== imgUrl)]
+                                    setActivityImages(prev => ({ ...prev, [selectedActivity.name]: updatedImages }))
+                                  }
+                                }}
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = `https://via.placeholder.com/200x150/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
+                                }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* 详细信息 */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="flex items-center gap-2 text-gray-600">
+                      <MapPin className="w-5 h-5 text-primary" />
+                      <span className="text-sm">{selectedActivity.location.name}</span>
+                    </div>
+                    {selectedActivity.duration && (
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <Clock className="w-5 h-5 text-primary" />
+                        <span className="text-sm">预计时长: {selectedActivity.duration}</span>
+                      </div>
+                    )}
+                    {selectedActivity.estimatedCost !== undefined && selectedActivity.estimatedCost !== null && (
+                      <div className="flex items-center gap-2 text-green-600 font-semibold">
+                        <DollarSign className="w-5 h-5" />
+                        <span className="text-sm">预估费用: ¥{selectedActivity.estimatedCost}</span>
+                      </div>
+                    )}
+                    {expenses[selectedActivity.name] !== undefined && (
+                      <div className="flex items-center gap-2 text-blue-600 font-semibold">
+                        <DollarSign className="w-5 h-5" />
+                        <span className="text-sm">实际支出: ¥{expenses[selectedActivity.name].toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* 费用记录按钮 */}
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    {expenses[selectedActivity.name] !== undefined ? (
+                      <button
+                        onClick={() => {
+                          const amount = prompt('请输入实际支出金额（元）', expenses[selectedActivity.name].toString())
+                          if (amount !== null) {
+                            handleAddExpense(selectedActivity.name, parseFloat(amount))
+                          }
+                        }}
+                        className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 text-sm font-semibold transition-colors"
+                      >
+                        修改费用记录
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          const amount = prompt('请输入实际支出金额（元）')
+                          if (amount !== null) {
+                            handleAddExpense(selectedActivity.name, parseFloat(amount))
+                          }
+                        }}
+                        className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 text-sm font-semibold transition-colors"
+                      >
+                        <Plus className="w-4 h-4 inline mr-2" />
+                        记录费用
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 日程选择 */}
+            <div className="bg-white rounded-xl shadow-lg p-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">选择日期</h3>
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                {plan.itinerary.map((day, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setActiveDay(index)}
+                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition-all ${
+                      activeDay === index
+                        ? 'bg-primary text-white shadow-md scale-105'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    第 {day.day} 天
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 当天行程 - 带图片的卡片式布局 */}
+            {currentDay && (
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+                <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-pink-50">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-2xl font-bold text-gray-800">第 {currentDay.day} 天</h2>
+                    <span className="text-sm text-gray-600 bg-white px-4 py-2 rounded-full font-semibold">
+                      预估费用: ¥{currentDay.estimatedCost.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+                <div className="p-6 space-y-6">
+                  {currentDayActivities.map((activity, index) => (
+                    <div
+                      key={index}
+                      id={`activity-${activity.name}`}
+                      onClick={() => handleActivityClick(activity)}
+                      className={`group cursor-pointer rounded-xl border-2 overflow-hidden transition-all ${
+                        highlightedActivity === activity.name
+                          ? 'border-yellow-400 shadow-xl scale-[1.02] bg-yellow-50'
+                          : 'border-gray-200 hover:border-primary hover:shadow-lg bg-white'
+                      }`}
+                    >
+                      <div className="flex flex-col md:flex-row">
+                        {/* 图片区域 */}
+                        <div className="md:w-64 w-full h-48 md:h-48 relative overflow-hidden bg-gray-200 flex-shrink-0">
+                          {loadingImages[activity.name] && (!activityImages[activity.name] || activityImages[activity.name].length === 0) ? (
+                            <div className="w-full h-full flex items-center justify-center bg-gray-200">
+                              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                            </div>
+                          ) : (
+                            <img
+                              src={getActivityImage(activity)}
+                              alt={activity.name}
+                              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                              onError={(e) => {
+                                const target = e.target as HTMLImageElement
+                                target.src = `https://via.placeholder.com/400x300/6366f1/ffffff?text=${encodeURIComponent(activity.name)}`
+                                console.error('Image load error for activity:', activity.name)
+                              }}
+                              onLoad={() => {
+                                console.log('Image loaded for activity:', activity.name)
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleActivityClick(activity)
+                              }}
+                            />
+                          )}
+                          <div className="absolute top-3 left-3">
+                            <span className={`px-3 py-1 text-xs font-bold rounded-full text-white shadow-lg ${
+                              activity.type === 'attraction'
+                                ? 'bg-blue-500'
+                                : activity.type === 'restaurant'
+                                ? 'bg-green-500'
+                                : activity.type === 'hotel'
+                                ? 'bg-purple-500'
+                                : 'bg-orange-500'
+                            }`}>
+                              {activity.type === 'attraction' ? '🏛️ 景点' : 
+                               activity.type === 'restaurant' ? '🍽️ 餐厅' : 
+                               activity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        {/* 内容区域 */}
+                        <div className="flex-1 p-6">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                <span className="text-sm font-bold text-gray-700 bg-gray-100 px-3 py-1 rounded-full">
+                                  {activity.time}
+                                </span>
+                                {activity.duration && (
+                                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                                    <Clock className="w-3 h-3" />
+                                    {activity.duration}
+                                  </div>
+                                )}
+                              </div>
+                              <h3 className="text-xl font-bold text-gray-800 mb-2 group-hover:text-primary transition-colors">
+                                {activity.name}
+                              </h3>
+                              {activity.description && (
+                                <p className="text-sm text-gray-600 mb-4 line-clamp-2">
+                                  {activity.description}
+                                </p>
+                              )}
+                              <div className="flex items-center gap-4 text-sm text-gray-500 mb-3">
+                                <div className="flex items-center gap-1">
+                                  <MapPin className="w-4 h-4" />
+                                  <span>{activity.location.name}</span>
+                                </div>
+                                {activity.estimatedCost !== undefined && activity.estimatedCost !== null && (
+                                  <div className="flex items-center gap-1 font-semibold text-green-600">
+                                    <DollarSign className="w-4 h-4" />
+                                    ¥{activity.estimatedCost}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            
+                            {/* 费用记录按钮 */}
+                            <div className="ml-4">
+                              {expenses[activity.name] !== undefined ? (
+                                <div className="text-right">
+                                  <div className="text-lg font-bold text-gray-800 mb-1">
+                                    ¥{expenses[activity.name].toLocaleString()}
+                                  </div>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      const amount = prompt('请输入实际支出金额（元）', expenses[activity.name].toString())
+                                      if (amount !== null) {
+                                        handleAddExpense(activity.name, parseFloat(amount))
+                                      }
+                                    }}
+                                    className="text-xs text-blue-600 hover:underline"
+                                  >
+                                    修改
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    const amount = prompt('请输入实际支出金额（元）')
+                                    if (amount !== null) {
+                                      handleAddExpense(activity.name, parseFloat(amount))
+                                    }
+                                  }}
+                                  className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 text-sm font-semibold transition-colors"
+                                >
+                                  <Plus className="w-4 h-4" />
+                                  记录费用
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 费用记录和AI分析 */}
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-primary" />
+                费用记录与分析
+              </h2>
+              <VoiceInput onResult={handleVoiceExpense} />
+              {voiceExpense && (
+                <div className="mt-2 p-3 bg-blue-50 rounded-lg text-sm text-gray-700">
+                  识别：{voiceExpense}
+                </div>
+              )}
+
+              <button
+                onClick={handleAnalyzeBudget}
+                disabled={analyzing}
+                className="mt-4 w-full px-4 py-3 bg-gradient-to-r from-primary to-purple-600 text-white rounded-lg hover:from-primary/90 hover:to-purple-600/90 disabled:opacity-50 font-semibold transition-all shadow-md"
+              >
+                {analyzing ? '分析中...' : '🤖 AI预算分析'}
+              </button>
+
+              {budgetAnalysis && (
+                <div className="mt-4 p-4 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg text-sm whitespace-pre-wrap border border-blue-200">
+                  {budgetAnalysis}
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/useAuth'
 import { createSupabaseClient } from '@/lib/supabase'
 import Link from 'next/link'
-import { Settings, Plus, LogOut, MapPin, Calendar, DollarSign } from 'lucide-react'
+import { Settings, Plus, LogOut, MapPin, Calendar, DollarSign, Trash2 } from 'lucide-react'
 
 interface TravelPlan {
   id: string
@@ -51,6 +51,47 @@ export default function DashboardPage() {
       console.error('Error loading plans:', error)
     } finally {
       setLoadingPlans(false)
+    }
+  }
+
+  const handleDeletePlan = async (planId: string, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    if (!confirm('确定要删除这个旅行计划吗？此操作无法撤销。')) {
+      return
+    }
+
+    try {
+      // 获取当前 session 以便在请求中传递认证信息
+      const supabase = createSupabaseClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      }
+      
+      // 如果有 session，将 access token 添加到请求头
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`
+      }
+
+      const response = await fetch(`/api/plans?id=${planId}`, {
+        method: 'DELETE',
+        headers,
+        credentials: 'include', // 确保 cookies 被发送
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || '删除失败')
+      }
+
+      // 重新加载计划列表
+      await loadPlans()
+    } catch (error: any) {
+      console.error('Error deleting plan:', error)
+      alert(error.message || '删除计划失败，请重试')
     }
   }
 
@@ -109,17 +150,20 @@ export default function DashboardPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {plans.map((plan) => (
-              <Link
+              <div
                 key={plan.id}
-                href={`/plan/${plan.id}`}
-                className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow"
+                className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow relative group"
               >
-                <div className="flex items-start justify-between mb-4">
-                  <h2 className="text-xl font-semibold text-gray-800">
-                    {plan.destination}
-                  </h2>
-                  <Calendar className="w-5 h-5 text-gray-400" />
-                </div>
+                <Link
+                  href={`/plan/${plan.id}`}
+                  className="block"
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <h2 className="text-xl font-semibold text-gray-800">
+                      {plan.destination}
+                    </h2>
+                    <Calendar className="w-5 h-5 text-gray-400" />
+                  </div>
 
                 <div className="space-y-2 text-sm text-gray-600">
                   <div className="flex items-center gap-2">
@@ -149,10 +193,21 @@ export default function DashboardPage() {
                   </div>
                 )}
 
-                <div className="mt-4 text-xs text-gray-400">
-                  {new Date(plan.created_at).toLocaleDateString('zh-CN')}
-                </div>
-              </Link>
+                  <div className="mt-4 text-xs text-gray-400">
+                    {new Date(plan.created_at).toLocaleDateString('zh-CN')}
+                  </div>
+                </Link>
+                
+                {/* 删除按钮 */}
+                <button
+                  onClick={(e) => handleDeletePlan(plan.id, e)}
+                  className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-all opacity-60 hover:opacity-100"
+                  title="删除计划"
+                  aria-label="删除计划"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             ))}
           </div>
         )}
