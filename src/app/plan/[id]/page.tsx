@@ -6,10 +6,10 @@ import { useAuth } from '@/hooks/useAuth'
 import { createSupabaseClient } from '@/lib/supabase'
 import MapView from '@/components/MapView'
 import { type TravelPlan, type Activity } from '@/lib/ai'
-import { loadActivityImages, searchActivityImages, saveActivityImages, type ActivityImage } from '@/lib/images'
-import { ArrowLeft, Calendar, DollarSign, Users, MapPin, Plus, Clock, Image as ImageIcon, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Calendar, DollarSign, Users, MapPin, Plus, Clock, TrendingUp, Image as ImageIcon } from 'lucide-react'
 import VoiceInput from '@/components/VoiceInput'
 import { analyzeBudget } from '@/lib/ai'
+import { loadActivityImages, searchAndSaveAllActivityImages, type ActivityImage } from '@/lib/images'
 
 export default function PlanDetailPage() {
   const { user, loading } = useAuth()
@@ -42,26 +42,6 @@ export default function PlanDetailPage() {
     }
   }, [user, planId])
 
-  // 当计划加载完成时，预加载所有活动的图片
-  useEffect(() => {
-    if (!plan) return
-    
-    const allActivitiesList = plan.itinerary.flatMap((day) => day.activities)
-    if (allActivitiesList.length === 0) return
-    
-    // 不立即设置备用图片，直接尝试加载真实图片
-    // 如果找不到相关图片，会显示"暂无图片"占位符，而不是误导性的随机图片
-    
-    // 异步加载数据库图片和搜索新图片
-    allActivitiesList.forEach(activity => {
-      // 使用setTimeout确保不阻塞渲染
-      setTimeout(() => {
-        loadImagesForActivity(activity).catch(error => {
-          console.error(`Error preloading images for ${activity.name}:`, error)
-        })
-      }, 100)
-    })
-  }, [plan]) // 只依赖plan，避免无限循环
 
   const loadPlan = async () => {
     try {
@@ -88,7 +68,7 @@ export default function PlanDetailPage() {
         setExpenses(expenseMap)
       }
 
-      setPlan({
+      const planData = {
         id: data.id,
         destination: data.destination,
         days: data.days,
@@ -99,12 +79,56 @@ export default function PlanDetailPage() {
         estimatedCost: data.estimated_cost || data.budget,
         createdAt: data.created_at,
         updatedAt: data.updated_at,
-      })
+      }
+      setPlan(planData)
+
+      // 加载所有活动的图片
+      const allActivities = planData.itinerary.flatMap((day) => day.activities)
+      await loadAllActivityImages(allActivities)
+      
+      // 后台搜索并保存新图片（如果数据库中没有）
+      searchAndSaveAllActivityImages(planId, allActivities)
+        .then(async () => {
+          // 图片搜索完成后，重新加载图片
+          await loadAllActivityImages(allActivities)
+        })
+        .catch((error) => {
+          console.error('Error searching images:', error)
+        })
     } catch (error) {
       console.error('Error loading plan:', error)
     } finally {
       setLoadingPlan(false)
     }
+  }
+
+  const loadAllActivityImages = async (activities: Activity[]) => {
+    const imagesMap: Record<string, ActivityImage[]> = {}
+    const loadingMap: Record<string, boolean> = {}
+
+    // 先设置所有活动为加载中
+    activities.forEach(activity => {
+      loadingMap[activity.name] = true
+    })
+    setLoadingImages({ ...loadingImages, ...loadingMap })
+
+    // 并行加载所有活动的图片
+    await Promise.all(
+      activities.map(async (activity) => {
+        try {
+          const images = await loadActivityImages(planId, activity.name)
+          imagesMap[activity.name] = images
+        } catch (error) {
+          console.error(`Error loading images for ${activity.name}:`, error)
+          imagesMap[activity.name] = []
+        } finally {
+          loadingMap[activity.name] = false
+        }
+      })
+    )
+
+    setActivityImages((prev) => ({ ...prev, ...imagesMap }))
+    setLoadingImages((prev) => ({ ...prev, ...loadingMap }))
   }
 
   const handleAddExpense = async (activityId: string, amount: number) => {
@@ -173,86 +197,24 @@ export default function PlanDetailPage() {
   const allActivities: Activity[] = plan.itinerary.flatMap((day) => day.activities)
   const currentDayActivities = currentDay?.activities || []
   
-  // 加载活动图片
-  const loadImagesForActivity = async (activity: Activity) => {
-    if (!plan) return
-    
-    // 如果已经加载过，直接返回
-    if (activityImages[activity.name] && activityImages[activity.name].length > 0) {
-      return
-    }
-
-    setLoadingImages(prev => ({ ...prev, [activity.name]: true }))
-    try {
-      // 先从数据库加载
-      const dbImages = await loadActivityImages(plan.id, activity.name)
-      
-      if (dbImages && dbImages.length > 0) {
-        // 如果数据库有图片，使用数据库图片
-        setActivityImages(prev => ({ ...prev, [activity.name]: dbImages }))
-      } else {
-        // 如果数据库没有图片，尝试搜索新图片
-        // 不设置备用图片，等待搜索结果
-        // 如果搜索不到相关图片，会显示"暂无图片"占位符
-        const images = await searchActivityImages(activity.name, activity.location.name)
-        if (images.length > 0) {
-          // 保存搜索到的图片到数据库
-          await saveActivityImages(plan.id, activity.name, images)
-          setActivityImages(prev => ({ ...prev, [activity.name]: images.map(img => ({
-            id: `search-${Date.now()}`,
-            plan_id: plan.id,
-            activity_name: activity.name,
-            image_url: img.url,
-            image_description: img.description || '',
-            created_at: new Date().toISOString()
-          })) }))
-        }
-        // 如果没有找到相关图片，不设置任何图片，会显示"暂无图片"占位符
-      }
-    } catch (error) {
-      console.error('Error loading images:', error)
-      // 出错时不设置任何图片，避免显示无关图片
-      // 会显示"暂无图片"占位符
-    } finally {
-      setLoadingImages(prev => ({ ...prev, [activity.name]: false }))
-    }
-  }
-
-  // 获取活动图片（优先使用数据库中的图片）
-  const getActivityImages = (activity: Activity): string[] => {
-    const images = activityImages[activity.name]
-    if (images && images.length > 0) {
-      return images.map(img => img.image_url)
-    }
-    // 如果没有加载过，返回空数组（会显示"暂无图片"占位符）
-    return []
-  }
-
-  // 获取活动主图（用于显示）
-  const getActivityImage = (activity: Activity): string => {
-    const images = getActivityImages(activity)
-    // 如果有相关图片，使用第一张；否则显示占位符（明确告知用户没有图片）
-    if (images.length > 0 && images[0]) {
-      return images[0]
-    }
-    // 使用占位符，明确显示"暂无图片"而不是随机图片
-    return `https://via.placeholder.com/400x300/e5e7eb/9ca3af?text=${encodeURIComponent('暂无图片')}`
-  }
-  
   const handleActivityClick = async (activity: Activity) => {
     setHighlightedActivity(activity.name)
     setSelectedActivity(activity) // 设置选中的活动，触发地图跳转和详情显示
     
-    // 如果还没有加载过图片，尝试加载（不设置备用图片）
+    // 如果该活动没有图片，尝试加载
     if (!activityImages[activity.name] || activityImages[activity.name].length === 0) {
-      // 直接加载图片，不设置备用图片
-      // 如果找不到相关图片，会显示"暂无图片"占位符
+      if (!loadingImages[activity.name]) {
+        setLoadingImages((prev) => ({ ...prev, [activity.name]: true }))
+        try {
+          const images = await loadActivityImages(planId, activity.name)
+          setActivityImages((prev) => ({ ...prev, [activity.name]: images }))
+        } catch (error) {
+          console.error(`Error loading images for ${activity.name}:`, error)
+        } finally {
+          setLoadingImages((prev) => ({ ...prev, [activity.name]: false }))
+        }
+      }
     }
-    
-    // 异步加载该活动的图片（从数据库加载，如果数据库有更好的图片会替换）
-    loadImagesForActivity(activity).catch(error => {
-      console.error('Error loading images for activity:', error)
-    })
     
     // 滚动到对应活动
     const element = document.getElementById(`activity-${activity.name}`)
@@ -355,14 +317,14 @@ export default function PlanDetailPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* 左侧：地图（占2/3） */}
             <div className="lg:col-span-2">
-              <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-                <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50 flex-shrink-0">
                   <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
                     <MapPin className="w-5 h-5 text-primary" />
                     行程地图
                   </h2>
                 </div>
-                <div className="h-[600px]">
+                <div className="h-[600px] w-full">
                   <MapView 
                     activities={allActivities}
                     onMarkerClick={handleActivityClick}
@@ -412,56 +374,6 @@ export default function PlanDetailPage() {
                       </button>
                     </div>
                     
-                    {/* 图片展示 */}
-                    <div className="mb-4">
-                      {loadingImages[selectedActivity.name] && (!activityImages[selectedActivity.name] || activityImages[selectedActivity.name].length === 0) ? (
-                        <div className="w-full h-64 bg-gray-200 rounded-lg flex items-center justify-center">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="relative w-full h-64 rounded-lg overflow-hidden bg-gray-200">
-                            <img
-                              src={getActivityImage(selectedActivity)}
-                              alt={selectedActivity.name}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                const target = e.target as HTMLImageElement
-                                target.src = `https://via.placeholder.com/800x400/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
-                                console.error('Image load error:', target.src)
-                              }}
-                              onLoad={() => {
-                                console.log('Image loaded successfully:', getActivityImage(selectedActivity))
-                              }}
-                            />
-                          </div>
-                          {getActivityImages(selectedActivity).length > 1 && (
-                            <div className="grid grid-cols-3 gap-2">
-                              {getActivityImages(selectedActivity).slice(1, 4).map((imgUrl, idx) => (
-                                <img
-                                  key={idx}
-                                  src={imgUrl}
-                                  alt={`${selectedActivity.name} ${idx + 2}`}
-                                  className="w-full h-20 object-cover rounded cursor-pointer hover:opacity-80 transition-opacity"
-                                  onClick={() => {
-                                    // 点击小图切换主图
-                                    const currentImages = activityImages[selectedActivity.name] || []
-                                    const clickedImage = currentImages.find(img => img.image_url === imgUrl)
-                                    if (clickedImage) {
-                                      const updatedImages = [clickedImage, ...currentImages.filter(img => img.image_url !== imgUrl)]
-                                      setActivityImages(prev => ({ ...prev, [selectedActivity.name]: updatedImages }))
-                                    }
-                                  }}
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).src = `https://via.placeholder.com/200x150/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
-                                  }}
-                                />
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
                     
                     {/* 详细信息 */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -488,6 +400,52 @@ export default function PlanDetailPage() {
                         </div>
                       )}
                     </div>
+                    
+                    {/* 图片展示 */}
+                    {selectedActivity && (
+                      <div className="mt-6 pt-6 border-t border-gray-200">
+                        <h4 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                          <ImageIcon className="w-5 h-5 text-primary" />
+                          相关图片
+                        </h4>
+                        {loadingImages[selectedActivity.name] ? (
+                          <div className="flex items-center justify-center py-8">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                            <span className="ml-3 text-gray-600">加载图片中...</span>
+                          </div>
+                        ) : activityImages[selectedActivity.name] && activityImages[selectedActivity.name].length > 0 ? (
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            {activityImages[selectedActivity.name].slice(0, 6).map((image, index) => (
+                              <div
+                                key={image.id}
+                                className="relative group cursor-pointer rounded-lg overflow-hidden aspect-video bg-gray-100"
+                              >
+                                <img
+                                  src={image.image_url}
+                                  alt={image.image_description || `${selectedActivity.name} - 图片 ${index + 1}`}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2YzZjRmNiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5Y2EzYWYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7lm77niYfliqDovb3lpLHotKU8L3RleHQ+PC9zdmc+'
+                                  }}
+                                />
+                                {image.image_description && (
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors duration-300 flex items-end">
+                                    <p className="text-white text-xs p-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 line-clamp-2">
+                                      {image.image_description}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-8 text-gray-500">
+                            <ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                            <p>暂无图片</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     
                     {/* 费用记录按钮 */}
                     <div className="mt-4 pt-4 border-t border-gray-200">
@@ -630,14 +588,14 @@ export default function PlanDetailPage() {
           /* 列表视图 - 带图片的详细行程 */
           <div className="space-y-6">
             {/* 地图预览 */}
-            <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-              <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+            <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
+              <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50 flex-shrink-0">
                 <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
                   <MapPin className="w-5 h-5 text-primary" />
                   行程地图
                 </h2>
               </div>
-              <div className="h-[400px]">
+              <div className="flex-1 min-h-0" style={{ height: '400px' }}>
                 <MapView 
                   activities={allActivities}
                   onMarkerClick={handleActivityClick}
@@ -687,56 +645,6 @@ export default function PlanDetailPage() {
                     </button>
                   </div>
                   
-                  {/* 图片展示 */}
-                  <div className="mb-4">
-                    {loadingImages[selectedActivity.name] && (!activityImages[selectedActivity.name] || activityImages[selectedActivity.name].length === 0) ? (
-                      <div className="w-full h-64 bg-gray-200 rounded-lg flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="relative w-full h-64 rounded-lg overflow-hidden bg-gray-200">
-                          <img
-                            src={getActivityImage(selectedActivity)}
-                            alt={selectedActivity.name}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              const target = e.target as HTMLImageElement
-                              target.src = `https://via.placeholder.com/800x400/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
-                              console.error('Image load error:', target.src)
-                            }}
-                            onLoad={() => {
-                              console.log('Image loaded successfully:', getActivityImage(selectedActivity))
-                            }}
-                          />
-                        </div>
-                        {getActivityImages(selectedActivity).length > 1 && (
-                          <div className="grid grid-cols-3 gap-2">
-                            {getActivityImages(selectedActivity).slice(1, 4).map((imgUrl, idx) => (
-                              <img
-                                key={idx}
-                                src={imgUrl}
-                                alt={`${selectedActivity.name} ${idx + 2}`}
-                                className="w-full h-20 object-cover rounded cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => {
-                                  // 点击小图切换主图
-                                  const currentImages = activityImages[selectedActivity.name] || []
-                                  const clickedImage = currentImages.find(img => img.image_url === imgUrl)
-                                  if (clickedImage) {
-                                    const updatedImages = [clickedImage, ...currentImages.filter(img => img.image_url !== imgUrl)]
-                                    setActivityImages(prev => ({ ...prev, [selectedActivity.name]: updatedImages }))
-                                  }
-                                }}
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).src = `https://via.placeholder.com/200x150/6366f1/ffffff?text=${encodeURIComponent(selectedActivity.name)}`
-                                }}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
                   
                   {/* 详细信息 */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -763,6 +671,52 @@ export default function PlanDetailPage() {
                       </div>
                     )}
                   </div>
+                  
+                  {/* 图片展示 */}
+                  {selectedActivity && (
+                    <div className="mt-6 pt-6 border-t border-gray-200">
+                      <h4 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                        <ImageIcon className="w-5 h-5 text-primary" />
+                        相关图片
+                      </h4>
+                      {loadingImages[selectedActivity.name] ? (
+                        <div className="flex items-center justify-center py-8">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                          <span className="ml-3 text-gray-600">加载图片中...</span>
+                        </div>
+                      ) : activityImages[selectedActivity.name] && activityImages[selectedActivity.name].length > 0 ? (
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                          {activityImages[selectedActivity.name].slice(0, 6).map((image, index) => (
+                            <div
+                              key={image.id}
+                              className="relative group cursor-pointer rounded-lg overflow-hidden aspect-video bg-gray-100"
+                            >
+                              <img
+                                src={image.image_url}
+                                alt={image.image_description || `${selectedActivity.name} - 图片 ${index + 1}`}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2YzZjRmNiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM5Y2EzYWYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7lm77niYfliqDovb3lpLHotKU8L3RleHQ+PC9zdmc+'
+                                }}
+                              />
+                              {image.image_description && (
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors duration-300 flex items-end">
+                                  <p className="text-white text-xs p-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 line-clamp-2">
+                                    {image.image_description}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 text-gray-500">
+                          <ImageIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                          <p>暂无图片</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   
                   {/* 费用记录按钮 */}
                   <div className="mt-4 pt-4 border-t border-gray-200">
@@ -842,46 +796,52 @@ export default function PlanDetailPage() {
                     >
                       <div className="flex flex-col md:flex-row">
                         {/* 图片区域 */}
-                        <div className="md:w-64 w-full h-48 md:h-48 relative overflow-hidden bg-gray-200 flex-shrink-0">
-                          {loadingImages[activity.name] && (!activityImages[activity.name] || activityImages[activity.name].length === 0) ? (
-                            <div className="w-full h-full flex items-center justify-center bg-gray-200">
-                              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                            </div>
-                          ) : (
+                        {activityImages[activity.name] && activityImages[activity.name].length > 0 ? (
+                          <div className="md:w-64 w-full h-48 md:h-auto relative overflow-hidden bg-gray-100">
                             <img
-                              src={getActivityImage(activity)}
-                              alt={activity.name}
-                              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                              src={activityImages[activity.name][0].image_url}
+                              alt={activityImages[activity.name][0].image_description || activity.name}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                               onError={(e) => {
-                                const target = e.target as HTMLImageElement
-                                target.src = `https://via.placeholder.com/400x300/6366f1/ffffff?text=${encodeURIComponent(activity.name)}`
-                                console.error('Image load error for activity:', activity.name)
-                              }}
-                              onLoad={() => {
-                                console.log('Image loaded for activity:', activity.name)
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleActivityClick(activity)
+                                (e.target as HTMLImageElement).style.display = 'none'
                               }}
                             />
-                          )}
-                          <div className="absolute top-3 left-3">
-                            <span className={`px-3 py-1 text-xs font-bold rounded-full text-white shadow-lg ${
-                              activity.type === 'attraction'
-                                ? 'bg-blue-500'
-                                : activity.type === 'restaurant'
-                                ? 'bg-green-500'
-                                : activity.type === 'hotel'
-                                ? 'bg-purple-500'
-                                : 'bg-orange-500'
-                            }`}>
-                              {activity.type === 'attraction' ? '🏛️ 景点' : 
-                               activity.type === 'restaurant' ? '🍽️ 餐厅' : 
-                               activity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
-                            </span>
+                            <div className="absolute top-3 left-3">
+                              <span className={`px-3 py-1 text-xs font-bold rounded-full text-white shadow-lg ${
+                                activity.type === 'attraction'
+                                  ? 'bg-blue-500'
+                                  : activity.type === 'restaurant'
+                                  ? 'bg-green-500'
+                                  : activity.type === 'hotel'
+                                  ? 'bg-purple-500'
+                                  : 'bg-orange-500'
+                              }`}>
+                                {activity.type === 'attraction' ? '🏛️ 景点' : 
+                                 activity.type === 'restaurant' ? '🍽️ 餐厅' : 
+                                 activity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div className="md:w-64 w-full h-48 md:h-auto relative overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
+                            <div className="absolute top-3 left-3">
+                              <span className={`px-3 py-1 text-xs font-bold rounded-full text-white shadow-lg ${
+                                activity.type === 'attraction'
+                                  ? 'bg-blue-500'
+                                  : activity.type === 'restaurant'
+                                  ? 'bg-green-500'
+                                  : activity.type === 'hotel'
+                                  ? 'bg-purple-500'
+                                  : 'bg-orange-500'
+                              }`}>
+                                {activity.type === 'attraction' ? '🏛️ 景点' : 
+                                 activity.type === 'restaurant' ? '🍽️ 餐厅' : 
+                                 activity.type === 'hotel' ? '🏨 住宿' : '🚗 交通'}
+                              </span>
+                            </div>
+                            <ImageIcon className="w-12 h-12 text-gray-400 opacity-50" />
+                          </div>
+                        )}
                         
                         {/* 内容区域 */}
                         <div className="flex-1 p-6">

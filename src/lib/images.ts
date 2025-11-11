@@ -27,30 +27,34 @@ export async function searchActivityImages(
       // 可以添加图片API keys（如果配置了）
       ...(config.unsplashKey && { unsplashKey: config.unsplashKey }),
       ...(config.pexelsKey && { pexelsKey: config.pexelsKey }),
+      ...(config.googleApiKey && { googleApiKey: config.googleApiKey }),
+      ...(config.googleSearchEngineId && { googleSearchEngineId: config.googleSearchEngineId }),
+      ...(config.bingApiKey && { bingApiKey: config.bingApiKey }),
     })
 
     const response = await axios.get(
       `/api/images/search?${searchParams.toString()}`,
       {
-        timeout: 15000, // 15秒超时
+        timeout: 30000, // 增加到30秒超时，因为现在有更多图片源和更长的搜索时间
       }
     )
 
     const images = response.data?.images || []
     const message = response.data?.message
     
-    // 如果明确返回"未找到相关图片"，直接返回空数组，不尝试其他方法
-    if (message === '未找到相关图片' || (images.length === 0 && message)) {
-      console.warn(`No relevant images found for: ${activityName}, returning empty array`)
-      return [] // 返回空数组，不显示无关图片
-    }
-    
+    // 如果找到了图片，直接返回
     if (images.length > 0) {
-      console.log(`Found ${images.length} relevant images from image search APIs`)
+      console.log(`[客户端] ✅ 图片搜索API成功：为"${activityName}"找到 ${images.length} 张图片`)
       return images.map((img: any) => ({
         url: img.url,
         description: img.description || `${activityName}${locationName ? ` (${locationName})` : ''}`
       }))
+    }
+    
+    // 如果没有找到图片，记录日志但继续尝试AI搜索
+    if (message === '未找到相关图片' || (images.length === 0 && message)) {
+      console.warn(`[客户端] ⚠️ 图片搜索API未找到相关图片：${activityName}，继续尝试AI搜索...`)
+      // 不直接返回，继续执行下面的AI搜索
     }
   } catch (error: any) {
     console.warn('Image search API failed, trying AI search:', error.message)
@@ -58,6 +62,7 @@ export async function searchActivityImages(
 
   // 如果图片搜索API没有结果，尝试使用AI搜索（但AI搜索的结果也需要验证相关性）
   if (config.llmApiKey) {
+    console.log(`[客户端] 🔍 开始AI图片搜索：${activityName}`)
     try {
       const response = await axios.post(
         '/api/ai/search-images',
@@ -74,6 +79,8 @@ export async function searchActivityImages(
       )
 
       const images = response.data.images || []
+      console.log(`[客户端] 📥 AI搜索返回：${images.length} 张图片（${activityName}）`)
+      
       if (images.length > 0) {
         // 严格验证AI返回的图片是否相关
         const relevantImages = images.filter((img: any) => {
@@ -103,20 +110,39 @@ export async function searchActivityImages(
         })
         
         if (relevantImages.length > 0) {
-          console.log(`Found ${relevantImages.length} relevant images from AI search`)
+          console.log(`[客户端] ✅ AI搜索成功：为"${activityName}"找到 ${relevantImages.length} 张有效图片`)
           return relevantImages
         } else {
-          console.warn('AI search returned images but none passed strict relevance check')
+          console.warn(`[客户端] ❌ AI搜索返回了 ${images.length} 张图片，但全部未通过相关性验证：${activityName}`)
+          console.warn(`[客户端] 💡 提示：查看服务器终端日志了解详细过滤原因`)
+          // 显示前3张被过滤的图片信息
+          images.slice(0, 3).forEach((img: any, idx: number) => {
+            console.warn(`[客户端]   被过滤的图片 ${idx + 1}:`, {
+              url: img.url?.substring(0, 60) + '...',
+              description: img.description?.substring(0, 40) || '(无描述)'
+            })
+          })
           return [] // 返回空数组，不显示无关图片
         }
+      } else {
+        console.warn(`[客户端] ⚠️ AI搜索返回空数组：${activityName}`)
+        console.warn(`[客户端] 💡 可能原因：1) AI未找到相关图片 2) 查看服务器终端日志了解详情`)
       }
     } catch (error: any) {
-      console.warn('AI image search failed:', error.message)
+      console.error(`[客户端] ❌ AI图片搜索出错：${activityName}`, {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        code: error.code
+      })
+      // 继续执行，返回空数组
     }
+  } else {
+    console.warn(`[客户端] ⚠️ 未配置LLM API Key，无法使用AI图片搜索：${activityName}`)
   }
 
   // 如果所有方法都失败，返回空数组而不是显示无关图片
-  console.warn(`No relevant images found for: ${activityName}, returning empty array`)
+  console.warn(`[客户端] ❌ 所有图片搜索方法都失败：${activityName}`)
   return []
 }
 

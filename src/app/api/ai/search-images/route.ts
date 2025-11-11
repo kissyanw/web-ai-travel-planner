@@ -20,148 +20,111 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 构建搜索提示词，让大模型返回图片URL
-    // 使用更具体的搜索关键词，提高图片相关性
-    const searchQuery = locationName 
-      ? `${activityName} ${locationName} travel tourism landmark`
-      : `${activityName} travel tourism landmark`
-    
-    const prompt = `请为以下旅游地点搜索并提供3-5张高质量的真实图片URL。地点信息：
-- 名称：${activityName}
-${locationName ? `- 位置：${locationName}` : ''}
+    // 构建搜索提示词
+    const searchPrompt = `请为以下旅游地点搜索3-5张真实的相关图片URL。要求：
+1. 图片必须与地点高度相关
+2. 必须是真实的、可访问的图片URL（以http://或https://开头）
+3. 优先使用Wikipedia、Unsplash、Pexels等知名图片网站
+4. 返回JSON格式，包含url和description字段
+5. 不要返回占位符、示例图片或无效URL
 
-搜索关键词：${searchQuery}
+地点名称：${activityName}${locationName ? `\n地点位置：${locationName}` : ''}
 
-请返回JSON格式，包含图片URL数组：
-{
-  "images": [
-    {
-      "url": "图片URL（必须是可公开访问的真实图片URL）",
-      "description": "图片描述"
-    }
-  ]
-}
-
-严格要求：
-1. 图片URL必须是真实可访问的URL，且URL或描述中必须包含景点名称的核心关键词
-2. 图片必须与地点高度相关，展示该地点的真实特色和外观
-3. 如果找不到与地点相关的图片，返回空数组：{"images": []}
-4. 绝对不要返回无关的通用旅行图片、随机图片或占位图片
-5. 只返回JSON，不要其他文字
-
-重要提示：
-- 图片URL或描述中必须包含景点名称的核心关键词（如"${activityName.replace(/[的|地|得|（|）|\(|\)|店|总店|分店]/g, '').trim()}"）
-- 如果无法找到包含这些关键词的相关图片，必须返回空数组
-- 不要使用随机图片、占位图片或通用旅行图片
-- 只返回与地点真实相关的图片，否则返回空数组`
+请返回JSON数组格式，例如：
+[
+  {
+    "url": "https://example.com/image1.jpg",
+    "description": "图片描述"
+  }
+]`
 
     // 支持阿里云通义千问API格式（兼容OpenAI格式）
-    let apiEndpoint = apiUrl
+    let dashscopeUrl = apiUrl
     if (apiUrl && apiUrl.includes('dashscope')) {
+      // 确保URL包含完整的chat/completions路径
       if (!apiUrl.includes('/chat/completions')) {
         if (apiUrl.includes('dashscope-intl')) {
-          apiEndpoint = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
+          dashscopeUrl = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
         } else if (!apiUrl.includes('/compatible-mode/v1')) {
-          apiEndpoint = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+          dashscopeUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
         } else {
-          apiEndpoint = apiUrl.endsWith('/') 
+          dashscopeUrl = apiUrl.endsWith('/') 
             ? `${apiUrl}chat/completions`
             : `${apiUrl}/chat/completions`
         }
       }
+    } else if (!apiUrl || !apiUrl.includes('openai')) {
+      // 如果没有指定URL或不是OpenAI，默认使用通义千问
+      dashscopeUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
     }
 
-    // 调用大模型API
+    // 使用OpenAI兼容格式
     const response = await axios.post(
-      apiEndpoint,
+      dashscopeUrl,
       {
         model: model || 'qwen-plus',
         messages: [
           {
             role: 'user',
-            content: prompt
+            content: searchPrompt
           }
         ],
-        temperature: 0.7,
+        temperature: 0.3, // 降低温度以获得更准确的结果
         max_tokens: 2000
       },
       {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Content-Type': 'application/json'
         },
-        timeout: 60000, // 60秒超时
+        timeout: 60000,
       }
     )
 
     const content = response.data.choices?.[0]?.message?.content || ''
 
     // 提取JSON内容
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      // 如果大模型没有返回有效JSON，返回空数组
-      console.warn('AI did not return valid JSON')
-      return NextResponse.json({ images: [] })
-    }
-
-    try {
-      const parsed = JSON.parse(jsonMatch[0])
-      if (parsed.images && Array.isArray(parsed.images) && parsed.images.length > 0) {
-        // 严格验证URL是否有效且相关
-        const validImages = parsed.images.filter((img: any) => {
-          if (!img.url || typeof img.url !== 'string' || !img.url.startsWith('http')) {
-            return false
-          }
-          
-          // 验证相关性：URL或描述必须包含景点名称的核心关键词
-          const url = img.url.toLowerCase()
-          const desc = (img.description || '').toLowerCase()
-          const activity = activityName.toLowerCase()
-          
-          // 提取核心关键词
-          const cleanActivity = activity
-            .replace(/[的|地|得|公园|景区|景点|旅游|观光|（|）|\(|\)|店|总店|分店|购物中心|观景台|国家森林公园|烈士陵园|博物馆|会馆|轻轨站|地铁站|餐厅|饭|菜|面|馆]/g, '')
-            .trim()
-          
-          const activityKeywords = cleanActivity.length > 0 
-            ? cleanActivity.split(/\s+/).filter(k => k.length > 1)
-            : [activity.replace(/[的|地|得|（|）|\(|\)]/g, '').trim()].filter(k => k.length > 1)
-          
-          // 必须包含至少一个核心关键词
-          const hasKeyword = activityKeywords.length > 0 && activityKeywords.some(keyword => 
-            keyword.length >= 2 && (url.includes(keyword) || desc.includes(keyword))
-          )
-          
-          // 排除明显不相关的图片
-          const isIrrelevant = /placeholder|default|sample|random|picsum|lorem|\.svg|\.gif/i.test(url) ||
-                              /placeholder|default|sample|random|picsum|lorem/i.test(desc)
-          
-          return hasKeyword && !isIrrelevant
-        })
+    const jsonMatch = content.match(/\[[\s\S]*\]/)
+    if (jsonMatch) {
+      try {
+        const images = JSON.parse(jsonMatch[0])
         
-        if (validImages.length > 0) {
-          return NextResponse.json({ images: validImages })
-        } else {
-          console.warn('AI returned images but none passed relevance check')
-          return NextResponse.json({ images: [] })
-        }
-      } else {
-        // 如果返回空数组，直接返回
-        return NextResponse.json({ images: [] })
+        // 验证和过滤图片
+        const validImages = images.filter((img: any) => {
+          if (!img.url || typeof img.url !== 'string') return false
+          if (!img.url.startsWith('http://') && !img.url.startsWith('https://')) return false
+          // 排除占位符和无效URL
+          if (/placeholder|default|sample|random|picsum|lorem/i.test(img.url)) return false
+          return true
+        })
+
+        console.log(`[服务器] ✅ AI搜索成功：为"${activityName}"找到 ${validImages.length}/${images.length} 张有效图片`)
+
+        return NextResponse.json({ images: validImages })
+      } catch (parseError) {
+        console.error('Failed to parse AI response as JSON:', parseError)
+        return NextResponse.json(
+          { error: 'AI did not return valid JSON', images: [] },
+          { status: 500 }
+        )
       }
-    } catch (parseError) {
-      console.error('Error parsing LLM response:', parseError)
-      return NextResponse.json({ images: [] })
+    } else {
+      console.warn('AI did not return JSON array in response')
+      return NextResponse.json(
+        { error: 'AI did not return valid JSON', images: [] },
+        { status: 500 }
+      )
     }
   } catch (error: any) {
-    console.error('Error searching images:', error)
-    
-    // 即使出错也返回空数组，不返回无关图片
-    return NextResponse.json({ images: [] })
+    console.error('AI image search error:', error)
+    return NextResponse.json(
+      { 
+        error: error.message || 'AI image search failed', 
+        images: [],
+        details: error.response?.data 
+      },
+      { status: 500 }
+    )
   }
 }
-
-// 不再使用备用方案，如果找不到相关图片，返回空数组
-// 这样可以避免显示误导性的无关图片
 

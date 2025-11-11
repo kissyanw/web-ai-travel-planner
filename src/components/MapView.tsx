@@ -146,6 +146,28 @@ export default function MapView({
       
       // 地图加载完成后，延迟加载控件以提高初始渲染速度
       map.on('complete', () => {
+        // 确保地图尺寸正确 - 高德地图需要知道容器尺寸
+        setTimeout(() => {
+          try {
+            // 强制地图重新计算尺寸
+            if (mapRef.current && map) {
+              const rect = mapRef.current.getBoundingClientRect()
+              if (rect.width > 0 && rect.height > 0) {
+                // 调用 resize 方法确保地图正确填充容器
+                // 高德地图 2.0 API 会自动处理，但我们可以确保它知道新尺寸
+                const currentSize = map.getSize()
+                if (!currentSize || currentSize.width !== rect.width || currentSize.height !== rect.height) {
+                  // 触发地图重新计算尺寸
+                  map.getSize()
+                }
+              }
+            }
+          } catch (e) {
+            // 忽略错误，高德地图会自动处理
+            console.warn('Map resize check failed:', e)
+          }
+        }, 300)
+        
         // 延迟加载控件，不阻塞地图渲染
         setTimeout(() => {
           map.plugin(['AMap.Scale'], () => {
@@ -201,6 +223,44 @@ export default function MapView({
       }
     }
   }, [activities, center, mapLoaded, zoom])
+
+  // 监听容器尺寸变化，自动调整地图尺寸
+  useEffect(() => {
+    if (!mapLoaded || !mapInstanceRef.current || !mapRef.current) return
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (mapInstanceRef.current && entries.length > 0) {
+        const entry = entries[0]
+        const { width, height } = entry.contentRect
+        
+        if (width > 0 && height > 0) {
+          try {
+            // 高德地图会自动检测容器尺寸变化（resizeEnable: true）
+            // 但有时需要手动触发，确保地图正确渲染
+            setTimeout(() => {
+              if (mapInstanceRef.current) {
+                // 获取当前地图尺寸
+                const currentSize = mapInstanceRef.current.getSize()
+                // 如果尺寸不匹配，触发重新渲染
+                if (!currentSize || Math.abs(currentSize.width - width) > 1 || Math.abs(currentSize.height - height) > 1) {
+                  // 高德地图会自动处理，这里只是确保它知道尺寸变化
+                  mapInstanceRef.current.getSize()
+                }
+              }
+            }, 50)
+          } catch (e) {
+            // 忽略错误，高德地图会自动处理
+          }
+        }
+      }
+    })
+
+    resizeObserver.observe(mapRef.current)
+
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [mapLoaded])
 
   useEffect(() => {
     if (!mapLoaded || !mapInstanceRef.current) return
@@ -519,14 +579,14 @@ export default function MapView({
   })
 
   return (
-    <div className="w-full">
+    <div className="w-full h-full relative">
       {hasForeignLocation && (
-        <div className="mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+        <div className="absolute top-2 left-2 z-10 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800 max-w-[calc(100%-16px)] shadow-sm">
           <p className="font-semibold">⚠️ 地图提示：</p>
           <p>高德地图对国外地区（如韩国、日本等）的详细街道信息支持有限，可能无法显示完整的街道和建筑细节。这是高德地图数据源的限制。</p>
         </div>
       )}
-      <div ref={mapRef} className="w-full h-96 rounded-lg overflow-hidden" />
+      <div ref={mapRef} className="w-full h-full rounded-lg overflow-hidden" />
     </div>
   )
 }

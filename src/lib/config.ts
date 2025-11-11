@@ -14,6 +14,9 @@ export const getConfig = () => {
       llmModel: process.env.NEXT_PUBLIC_LLM_MODEL || 'qwen-plus',
       unsplashKey: process.env.NEXT_PUBLIC_UNSPLASH_ACCESS_KEY || '',
       pexelsKey: process.env.NEXT_PUBLIC_PEXELS_API_KEY || '',
+      googleApiKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY || '',
+      googleSearchEngineId: process.env.NEXT_PUBLIC_GOOGLE_SEARCH_ENGINE_ID || '',
+      bingApiKey: process.env.NEXT_PUBLIC_BING_API_KEY || '',
     }
   } else {
     // 客户端 - 从localStorage或环境变量获取
@@ -38,6 +41,9 @@ export const getConfig = () => {
       llmModel: localStorage.getItem('llm-model') || 'qwen-plus',
       unsplashKey: localStorage.getItem('unsplash-key') || process.env.NEXT_PUBLIC_UNSPLASH_ACCESS_KEY || '',
       pexelsKey: localStorage.getItem('pexels-key') || process.env.NEXT_PUBLIC_PEXELS_API_KEY || '',
+      googleApiKey: localStorage.getItem('google-api-key') || process.env.NEXT_PUBLIC_GOOGLE_API_KEY || '',
+      googleSearchEngineId: localStorage.getItem('google-search-engine-id') || process.env.NEXT_PUBLIC_GOOGLE_SEARCH_ENGINE_ID || '',
+      bingApiKey: localStorage.getItem('bing-api-key') || process.env.NEXT_PUBLIC_BING_API_KEY || '',
     }
   }
 }
