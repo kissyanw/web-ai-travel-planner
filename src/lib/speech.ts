@@ -28,7 +28,7 @@ export class XfyunSpeechRecognizer {
     const signatureBytes = Uint8Array.from(
       signatureSha.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16))
     )
-    const signature = btoa(String.fromCharCode(...signatureBytes))
+    const signature = btoa(String.fromCharCode.apply(null, Array.from(signatureBytes)))
 
     // 生成authorization字符串
     const authorizationOrigin = `api_key="${this.apiKey}", algorithm="hmac-sha1", headers="host date request-line", signature="${signature}"`
@@ -133,7 +133,7 @@ export class XfyunSpeechRecognizer {
           status: 1, // 1表示第一帧，2表示中间帧，3表示最后一帧
           format: 'audio/L16;rate=16000',
           encoding: 'raw',
-          audio: btoa(String.fromCharCode(...new Uint8Array(audioData)))
+          audio: btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(audioData))))
         }
       }
       this.ws.send(JSON.stringify(frame))
@@ -160,9 +160,11 @@ export class BrowserSpeechRecognizer {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition()
-        this.recognition.lang = 'zh-CN'
-        this.recognition.continuous = true
-        this.recognition.interimResults = true
+        if (this.recognition) {
+          this.recognition.lang = 'zh-CN'
+          this.recognition.continuous = true
+          this.recognition.interimResults = true
+        }
       }
     }
   }

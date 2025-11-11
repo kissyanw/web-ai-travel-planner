@@ -19,7 +19,21 @@ export function useAuth() {
       // 检查是否有配置
       if (typeof window !== 'undefined') {
         const storedConfig = localStorage.getItem('api-config')
-        const hasConfig = supabaseUrl || (storedConfig && JSON.parse(storedConfig).supabaseUrl)
+        let configUrl = supabaseUrl
+        let configKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+        
+        // 从localStorage读取配置
+        if (storedConfig) {
+          try {
+            const config = JSON.parse(storedConfig)
+            if (config.supabaseUrl) configUrl = config.supabaseUrl
+            if (config.supabaseAnonKey) configKey = config.supabaseAnonKey
+          } catch {
+            // 解析失败，继续使用环境变量
+          }
+        }
+        
+        const hasConfig = configUrl && configKey
         
         if (!hasConfig) {
           // 没有配置，设置loading为false但不报错

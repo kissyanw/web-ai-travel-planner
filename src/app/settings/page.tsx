@@ -25,23 +25,21 @@ export default function SettingsPage() {
   })
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.push('/auth')
-    } else {
-      const currentConfig = getConfig()
-      setConfig({
-        supabaseUrl: currentConfig.supabaseUrl || '',
-        supabaseAnonKey: currentConfig.supabaseAnonKey || '',
-        amapKey: currentConfig.amapKey || '',
-        xfyunAppId: currentConfig.xfyunAppId || '',
-        xfyunApiKey: currentConfig.xfyunApiKey || '',
-        xfyunApiSecret: currentConfig.xfyunApiSecret || '',
-        llmApiKey: currentConfig.llmApiKey || '',
-        llmApiUrl: currentConfig.llmApiUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
-        llmModel: currentConfig.llmModel || 'qwen-plus',
-      })
-    }
-  }, [user, loading, router])
+    // 允许未登录用户访问设置页面（因为需要先配置才能登录）
+    // 加载配置
+    const currentConfig = getConfig()
+    setConfig({
+      supabaseUrl: currentConfig.supabaseUrl || '',
+      supabaseAnonKey: currentConfig.supabaseAnonKey || '',
+      amapKey: currentConfig.amapKey || '',
+      xfyunAppId: currentConfig.xfyunAppId || '',
+      xfyunApiKey: currentConfig.xfyunApiKey || '',
+      xfyunApiSecret: currentConfig.xfyunApiSecret || '',
+      llmApiKey: currentConfig.llmApiKey || '',
+      llmApiUrl: currentConfig.llmApiUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      llmModel: currentConfig.llmModel || 'qwen-plus',
+    })
+  }, [])
 
   const handleSave = () => {
     setSaving(true)
@@ -58,13 +56,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
-    )
-  }
+  // 不再需要等待用户登录，允许未登录用户配置
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -245,6 +237,22 @@ export default function SettingsPage() {
             <Save className="w-4 h-4" />
             {saving ? '保存中...' : '保存配置'}
           </button>
+          
+          {!user && config.supabaseUrl && config.supabaseAnonKey && (
+            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-md">
+              <p className="text-sm text-green-800">
+                ✅ <strong>配置已加载：</strong>检测到环境变量配置。点击&ldquo;保存配置&rdquo;后，页面会自动刷新，然后您就可以注册/登录账户了。
+              </p>
+            </div>
+          )}
+          
+          {!user && (!config.supabaseUrl || !config.supabaseAnonKey) && (
+            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
+              <p className="text-sm text-blue-800">
+                💡 <strong>提示：</strong>请填写Supabase配置信息。配置保存后，页面会自动刷新，然后您就可以注册/登录账户了。
+              </p>
+            </div>
+          )}
         </div>
       </main>
     </div>

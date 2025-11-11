@@ -42,12 +42,10 @@ export default function Home() {
               前往设置页面
             </Link>
             <div className="text-sm text-gray-500 space-y-2">
-              <p><strong>方式一：</strong>在设置页面配置（推荐）</p>
-              <p><strong>方式二：</strong>创建 <code className="bg-gray-100 px-1 rounded">.env.local</code> 文件：</p>
-              <pre className="bg-gray-100 p-3 rounded text-xs overflow-x-auto">
-{`NEXT_PUBLIC_SUPABASE_URL=your-url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-key`}
-              </pre>
+              <p><strong>说明：</strong>点击下面的按钮前往设置页面，填写Supabase配置信息即可开始使用。</p>
+              <p className="text-xs mt-2">
+                💡 提示：如果使用Docker镜像，环境变量可能已经配置，但需要先在设置页面保存一次以激活配置。
+              </p>
             </div>
           </div>
         </div>

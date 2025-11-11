@@ -11,8 +11,9 @@ on:
       - master
 
 env:
-  REGISTRY: registry.cn-hangzhou.aliyuncs.com
-  IMAGE_NAME: ${{ secrets.ALIYUN_REGISTRY_NAME || 'web-ai-travel-planner' }}
+  REGISTRY: crpi-d5cvf2641cviwpw5.cn-hangzhou.personal.cr.aliyuncs.com
+  NAMESPACE: travel-planner-wy
+  IMAGE_NAME: web-ai-travel-planner
 
 jobs:
   build-and-push:
@@ -27,24 +28,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Aliyun Container Registry
+      - name: Log in to Aliyun Personal Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME || 'wangyannju' }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -53,8 +55,15 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL || '' }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || '' }}
+            NEXT_PUBLIC_AMAP_KEY=${{ secrets.NEXT_PUBLIC_AMAP_KEY || '' }}
+            NEXT_PUBLIC_LLM_API_KEY=${{ secrets.NEXT_PUBLIC_LLM_API_KEY || '' }}
+            NEXT_PUBLIC_LLM_API_URL=${{ secrets.NEXT_PUBLIC_LLM_API_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1' }}
+            NEXT_PUBLIC_LLM_MODEL=${{ secrets.NEXT_PUBLIC_LLM_MODEL || 'qwen-plus' }}
 
       - name: Output image info
         if: github.event_name != 'pull_request'

@@ -282,9 +282,9 @@ export default function NewPlanPage() {
         next.preferences = mergedPreferences
       }
       if (parsed.additionalInfo) {
-        const alreadyIncludes = prev.additionalInfo.includes(
+        const alreadyIncludes = prev.additionalInfo?.includes(
           parsed.additionalInfo,
-        )
+        ) ?? false
         next.additionalInfo = alreadyIncludes
           ? prev.additionalInfo
           : prev.additionalInfo
@@ -306,7 +306,7 @@ export default function NewPlanPage() {
       const request: TravelRequest = {
         ...formData,
         additionalInfo:
-          voiceInput && !formData.additionalInfo.includes(voiceInput)
+          voiceInput && !formData.additionalInfo?.includes(voiceInput)
             ? formData.additionalInfo
               ? `${formData.additionalInfo}\n${voiceInput}`
               : voiceInput

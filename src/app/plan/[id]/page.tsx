@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/hooks/useAuth'
 import { createSupabaseClient } from '@/lib/supabase'
 import MapView from '@/components/MapView'
-import { type TravelPlan, type Activity } from '@/lib/ai'
+import { type TravelPlan, type Activity, type DayPlan } from '@/lib/ai'
 import { ArrowLeft, Calendar, DollarSign, Users, MapPin, Plus, Clock, TrendingUp, Image as ImageIcon } from 'lucide-react'
 import VoiceInput from '@/components/VoiceInput'
 import { analyzeBudget } from '@/lib/ai'
@@ -68,7 +68,7 @@ export default function PlanDetailPage() {
         setExpenses(expenseMap)
       }
 
-      const planData = {
+      const planData: TravelPlan = {
         id: data.id,
         destination: data.destination,
         days: data.days,
@@ -83,7 +83,7 @@ export default function PlanDetailPage() {
       setPlan(planData)
 
       // 加载所有活动的图片
-      const allActivities = planData.itinerary.flatMap((day) => day.activities)
+      const allActivities = planData.itinerary.flatMap((day: DayPlan) => day.activities)
       await loadAllActivityImages(allActivities)
       
       // 后台搜索并保存新图片（如果数据库中没有）

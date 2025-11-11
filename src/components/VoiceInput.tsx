@@ -108,7 +108,7 @@ export default function VoiceInput({ onResult }: VoiceInputProps) {
       )}
 
       <p className="text-xs text-gray-500">
-        提示：说出你的旅行需求，例如"我想去日本，5天，预算1万元，喜欢美食和动漫，带孩子"
+        提示：说出你的旅行需求，例如&ldquo;我想去日本，5天，预算1万元，喜欢美食和动漫，带孩子&rdquo;
       </p>
     </div>
   )

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  app:
+    image: crpi-d5cvf2641cviwpw5.cn-hangzhou.personal.cr.aliyuncs.com/travel-planner-wy/web-ai-travel-planner:latest
+    container_name: web-ai-travel-planner
+    ports:
+      - "3000:3000"
+    environment:
+      # 必需配置
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - NEXT_PUBLIC_LLM_API_KEY=${NEXT_PUBLIC_LLM_API_KEY}
+      # 可选配置
+      - NEXT_PUBLIC_AMAP_KEY=${NEXT_PUBLIC_AMAP_KEY:-}
+      - NEXT_PUBLIC_LLM_API_URL=${NEXT_PUBLIC_LLM_API_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - NEXT_PUBLIC_LLM_MODEL=${NEXT_PUBLIC_LLM_MODEL:-qwen-plus}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+

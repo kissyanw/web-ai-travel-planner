@@ -29,6 +29,14 @@ const nextConfig = {
     ],
     unoptimized: false,
   },
+  eslint: {
+    // 在构建时忽略 ESLint 错误（仅显示警告）
+    ignoreDuringBuilds: false,
+  },
+  typescript: {
+    // 在构建时忽略 TypeScript 错误（仅显示警告）
+    ignoreBuildErrors: false,
+  },
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {

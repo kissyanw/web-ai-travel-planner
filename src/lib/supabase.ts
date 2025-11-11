@@ -33,18 +33,19 @@ function getSupabaseConfig() {
 
 // 客户端组件使用
 export const createSupabaseClient = () => {
+  // 先获取配置
+  const config = getSupabaseConfig()
+  
+  // 如果有配置，使用手动创建的客户端（更可靠）
+  if (config.url && config.key && config.url !== 'https://placeholder.supabase.co') {
+    return createClient(config.url, config.key)
+  }
+  
+  // 尝试使用 auth helpers（需要环境变量）
   try {
-    // 首先尝试使用 auth helpers（需要环境变量）
     return createClientComponentClient()
   } catch (error) {
-    // 如果失败，尝试手动创建客户端
-    const config = getSupabaseConfig()
-    if (config.url && config.key) {
-      return createClient(config.url, config.key)
-    }
-    
-    // 如果都没有配置，创建一个假的客户端（避免崩溃）
-    // 返回一个会失败但不会崩溃的客户端
+    // 如果失败，创建一个假的客户端（避免崩溃）
     console.warn('Supabase not configured. Please configure in settings page.')
     return createClient('https://placeholder.supabase.co', 'placeholder-key')
   }
